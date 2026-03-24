@@ -1,0 +1,18 @@
+{
+  "required": true,
+  "package": "me.duncanruns.speedrunshowdown.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+    "BedBlockMixin",
+    "BucketItemMixin",
+    "PlayerAdvancementTrackerMixin",
+    "PortalManagerMixin",
+    "RespawnAnchorBlockMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  },
+  "overwrites": {
+    "requireAnnotations": true
+	}
+}
