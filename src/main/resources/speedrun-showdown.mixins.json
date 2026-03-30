@@ -5,8 +5,8 @@
   "mixins": [
     "BedBlockMixin",
     "BucketItemMixin",
-    "PlayerAdvancementTrackerMixin",
-    "PortalManagerMixin",
+    "PlayerAdvancementsMixin",
+    "PortalProcessorMixin",
     "RespawnAnchorBlockMixin"
   ],
   "injectors": {

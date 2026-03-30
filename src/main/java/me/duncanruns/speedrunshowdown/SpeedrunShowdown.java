@@ -4,16 +4,19 @@ import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.loader.api.FabricLoader;
-import net.minecraft.entity.effect.StatusEffectInstance;
-import net.minecraft.entity.effect.StatusEffects;
+import net.minecraft.commands.Commands;
+import net.minecraft.core.Holder;
+import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.command.CommandManager;
-import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.server.world.ServerWorld;
-import net.minecraft.text.Text;
-import net.minecraft.util.math.Vec3d;
-import net.minecraft.world.TeleportTarget;
-import net.minecraft.world.rule.GameRules;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.clock.ServerClockManager;
+import net.minecraft.world.clock.WorldClock;
+import net.minecraft.world.effect.MobEffectInstance;
+import net.minecraft.world.effect.MobEffects;
+import net.minecraft.world.level.gamerules.GameRules;
+import net.minecraft.world.level.portal.TeleportTransition;
+import net.minecraft.world.phys.Vec3;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -42,30 +45,30 @@ public class SpeedrunShowdown implements ModInitializer {
     public void onInitialize() {
         if (Files.exists(releaseFile)) released = true;
 
-        final Vec3d holdPos = new Vec3d(0, 1000000, 0);
+        final Vec3 holdPos = new Vec3(0, 1000000, 0);
         ServerTickEvents.START_SERVER_TICK.register(minecraftServer -> {
             tickNetherTimer(minecraftServer);
             tickStartTimer(minecraftServer);
             if (rrts != null) {
-                ServerWorld world = minecraftServer.getWorlds().iterator().next();
-                world.getGameRules().setValue(GameRules.RESPAWN_RADIUS, rrts, minecraftServer);
+                ServerLevel world = minecraftServer.getAllLevels().iterator().next();
+                world.getGameRules().set(GameRules.RESPAWN_RADIUS, rrts, minecraftServer);
                 rrts = null;
             }
             if (released) return;
-            for (ServerPlayerEntity player : minecraftServer.getPlayerManager().getPlayerList()) {
+            for (ServerPlayer player : minecraftServer.getPlayerList().getPlayers()) {
                 if (!player.isAlive()) continue;
-                player.addStatusEffect(new StatusEffectInstance(StatusEffects.BLINDNESS, 10000, 100, true, false));
-                player.addStatusEffect(new StatusEffectInstance(StatusEffects.WEAKNESS, 10000, 100, true, false));
-                player.teleportTo(new TeleportTarget(player.getEntityWorld(), holdPos, Vec3d.ZERO, 0, 0, TeleportTarget.NO_OP));
+                player.addEffect(new MobEffectInstance(MobEffects.BLINDNESS, 10000, 100, true, false));
+                player.addEffect(new MobEffectInstance(MobEffects.WEAKNESS, 10000, 100, true, false));
+                player.teleport(new TeleportTransition(player.level(), holdPos, Vec3.ZERO, 0, 0, TeleportTransition.DO_NOTHING));
             }
         });
         CommandRegistrationCallback.EVENT.register((commandDispatcher, commandRegistryAccess, registrationEnvironment) -> {
-            commandDispatcher.register(CommandManager.literal("release").requires(CommandManager.requirePermissionLevel(CommandManager.GAMEMASTERS_CHECK)).executes(context -> {
+            commandDispatcher.register(Commands.literal("release").requires(Commands.hasPermission(Commands.LEVEL_GAMEMASTERS)).executes(context -> {
                 MinecraftServer server = context.getSource().getServer();
                 startTimer = 100;
                 return 1;
             }));
-            commandDispatcher.register(CommandManager.literal("unrelease").requires(CommandManager.requirePermissionLevel(CommandManager.GAMEMASTERS_CHECK)).executes(context -> {
+            commandDispatcher.register(Commands.literal("unrelease").requires(Commands.hasPermission(Commands.LEVEL_GAMEMASTERS)).executes(context -> {
                 MinecraftServer server = context.getSource().getServer();
                 return unrelease(server) ? 1 : 0;
             }));
@@ -81,8 +84,12 @@ public class SpeedrunShowdown implements ModInitializer {
         } catch (Exception e) {
             LOGGER.error("Failed to create release file!", e);
         }
-        server.getOverworld().setWeather(0, 1, true, false);
-        server.getWorlds().forEach(world -> world.setTimeOfDay(0));
+        server.setWeatherParameters(0, 1, true, false);
+        ServerClockManager clockManager = server.clockManager();
+        server.getAllLevels().forEach(level -> {
+            Holder<WorldClock> clock = level.dimensionTypeRegistration().value().defaultClock().orElseThrow();
+            clockManager.setTotalTicks(clock, 0);
+        });
         netherTimer = FIFTEEN_MINUTES;
         return true;
     }
@@ -102,16 +109,16 @@ public class SpeedrunShowdown implements ModInitializer {
     }
 
     private static void instaKillAllPlayers(MinecraftServer server) {
-        ServerWorld world = server.getWorlds().iterator().next();
+        ServerLevel world = server.getAllLevels().iterator().next();
         GameRules gameRules = world.getGameRules();
-        rrts = gameRules.getValue(GameRules.RESPAWN_RADIUS);
-        boolean oldDIR = gameRules.getValue(GameRules.DO_IMMEDIATE_RESPAWN);
-        gameRules.setValue(GameRules.RESPAWN_RADIUS, 0, server);
-        gameRules.setValue(GameRules.DO_IMMEDIATE_RESPAWN, true, server);
-        for (ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
-            player.kill(player.getEntityWorld());
+        rrts = gameRules.get(GameRules.RESPAWN_RADIUS);
+        boolean oldDIR = gameRules.get(GameRules.IMMEDIATE_RESPAWN);
+        gameRules.set(GameRules.RESPAWN_RADIUS, 0, server);
+        gameRules.set(GameRules.IMMEDIATE_RESPAWN, true, server);
+        for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+            player.kill(player.level());
         }
-        gameRules.setValue(GameRules.DO_IMMEDIATE_RESPAWN, oldDIR, server);
+        gameRules.set(GameRules.IMMEDIATE_RESPAWN, oldDIR, server);
     }
 
     public static boolean canEnterNether() {
@@ -123,13 +130,13 @@ public class SpeedrunShowdown implements ModInitializer {
         // If there's more than 5 minutes left, announce every 5 minutes, otherwise announce every minute
         int announcementRate = netherTimer >= FIVE_MINUTES ? FIVE_MINUTES : ONE_MINUTE;
         if (netherTimer > 0 && netherTimer % announcementRate == 0) {
-            server.getPlayerManager().broadcast(Text.literal("The Nether opens in " + netherTimer / 20 / 60 + " minutes."), false);
+            server.getPlayerList().broadcastSystemMessage(Component.literal("The Nether opens in " + netherTimer / 20 / 60 + " minutes."), false);
         } else if (netherTimer == 0) {
-            server.getPlayerManager().broadcast(Text.literal("The Nether is now open!"), false);
+            server.getPlayerList().broadcastSystemMessage(Component.literal("The Nether is now open!"), false);
         }
 
-        if(netherTimer > 0 && netherTimer <= 100 && netherTimer % 20 == 0) {
-            server.getPlayerManager().broadcast(Text.literal("The Nether opens in " + netherTimer / 20 + " seconds."), false);
+        if (netherTimer > 0 && netherTimer <= 100 && netherTimer % 20 == 0) {
+            server.getPlayerList().broadcastSystemMessage(Component.literal("The Nether opens in " + netherTimer / 20 + " seconds."), false);
         }
         netherTimer--;
     }
@@ -137,7 +144,7 @@ public class SpeedrunShowdown implements ModInitializer {
     private static void tickStartTimer(MinecraftServer server) {
         if (startTimer < 0) return;
         if (startTimer > 0 && startTimer % 20 == 0) {
-            server.getPlayerManager().broadcast(Text.literal("The game starts in " + startTimer / 20 + " seconds."), false);
+            server.getPlayerList().broadcastSystemMessage(Component.literal("The game starts in " + startTimer / 20 + " seconds."), false);
         }
         if (startTimer == 0) {
             release(server);
