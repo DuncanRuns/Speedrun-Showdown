@@ -5,6 +5,7 @@
   "mixins": [
     "BedBlockMixin",
     "BucketItemMixin",
+    "MinecraftServerMixin",
     "PlayerAdvancementsMixin",
     "PortalProcessorMixin",
     "RespawnAnchorBlockMixin"
